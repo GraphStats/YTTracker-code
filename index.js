@@ -224,16 +224,20 @@ async function autoScan() {
 
 // Routes API
 app.get('/api/channels', async (req, res) => {
-  const result = await Promise.all(channels.map(async (channelId) => {
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 50;
+  const startIndex = (page - 1) * limit;
+  const endIndex = page * limit;
+
+  // Prepare all data first (needed for sorting)
+  const allData = await Promise.all(channels.map(async (channelId) => {
     let history = channelDataCache[channelId];
 
-    // Si le cache est vide, charger depuis le fichier
     if (!history || history.length === 0) {
       const filePath = path.join(DATA_DIR, `${channelId}.json`);
       try {
         const fileData = await fs.readFile(filePath, 'utf8');
         history = JSON.parse(fileData);
-        // Recharger dans le cache pour les prochaines requêtes
         channelDataCache[channelId] = history;
       } catch {
         history = [];
@@ -251,7 +255,18 @@ app.get('/api/channels', async (req, res) => {
       avatar: latest.avatar || ''
     };
   }));
-  res.json(result);
+
+  // Sort by subscribers (descending)
+  allData.sort((a, b) => b.subscribers - a.subscribers);
+
+  // Pagination
+  const results = {};
+  results.total = allData.length;
+  results.totalPages = Math.ceil(allData.length / limit);
+  results.page = page;
+  results.data = allData.slice(startIndex, endIndex);
+
+  res.json(results);
 });
 
 app.post('/add-channel', async (req, res) => {
