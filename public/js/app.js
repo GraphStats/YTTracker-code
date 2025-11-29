@@ -173,8 +173,45 @@ async function openDetails(channelId) {
         const res = await fetch(`/data/${channelId}`);
         const history = await res.json();
         renderChart(history);
+
+        // Setup update button
+        const updateBtn = document.getElementById('updateBtn');
+        updateBtn.onclick = () => requestUpdate(channelId, updateBtn);
+
     } catch (e) {
         console.error('Failed to load history', e);
+    }
+}
+
+async function requestUpdate(channelId, btn) {
+    const originalText = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Updating...';
+
+    try {
+        const res = await fetch(`/api/update/${channelId}`, { method: 'POST' });
+        if (res.ok) {
+            // Refresh data
+            const historyRes = await fetch(`/data/${channelId}`);
+            const history = await historyRes.json();
+            renderChart(history);
+
+            // Update stats in modal
+            const latest = history[history.length - 1];
+            if (latest) {
+                document.getElementById('modalSubs').innerText = formatNumber(latest.subscribers);
+            }
+
+            fetchChannels(); // Refresh grid too
+        }
+    } catch (e) {
+        console.error('Update failed', e);
+    } finally {
+        btn.innerHTML = '<i class="fas fa-check"></i> Updated';
+        setTimeout(() => {
+            btn.disabled = false;
+            btn.innerHTML = originalText;
+        }, 5000);
     }
 }
 
