@@ -32,6 +32,8 @@ async function fetchChannels() {
     try {
         const res = await fetch(`${API_BASE}/channels`);
         const data = await res.json();
+        // Sort by subscribers (descending)
+        data.sort((a, b) => b.subscribers - a.subscribers);
         channels = data;
         updateGrid(filterChannels(searchInput.value));
     } catch (err) {
