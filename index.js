@@ -90,6 +90,8 @@ async function fetchChannelData(channelId) {
       timestamp: getTimestamp(),
       channelId,
       subscribers: Number(item?.statistics?.subscriberCount || 0),
+      viewCount: Number(item?.statistics?.viewCount || 0),
+      videoCount: Number(item?.statistics?.videoCount || 0),
       name: item?.snippet?.title || 'Unknown',
       avatar: item?.snippet?.thumbnails?.default?.url || ''
     };
@@ -242,6 +244,8 @@ app.get('/api/channels', async (req, res) => {
     return {
       channelId,
       subscribers: latest.subscribers || 0,
+      viewCount: latest.viewCount || 0,
+      videoCount: latest.videoCount || 0,
       timestamp: latest.timestamp || 'N/A',
       name: latest.name || channelId,
       avatar: latest.avatar || ''
