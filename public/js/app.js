@@ -11,6 +11,18 @@ const newChannelInput = document.getElementById('newChannelId');
 
 // Initial Load
 document.addEventListener('DOMContentLoaded', () => {
+    // Loading Screen Logic
+    const loadingScreen = document.getElementById('loading-screen');
+    const randomDuration = Math.floor(Math.random() * (4000 - 2000 + 1) + 2000); // 2-4 seconds
+
+    setTimeout(() => {
+        loadingScreen.classList.add('hidden');
+        // Optional: Remove from DOM after transition
+        setTimeout(() => {
+            loadingScreen.style.display = 'none';
+        }, 500);
+    }, randomDuration);
+
     fetchChannels();
     setInterval(fetchChannels, 60000); // Auto refresh every 5s
 });
