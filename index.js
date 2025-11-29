@@ -265,6 +265,18 @@ app.post('/add-channel', async (req, res) => {
   res.json({ success: true, route: `/data/${id}` });
 });
 
+app.post('/api/update/:id', async (req, res) => {
+  const { id } = req.params;
+  if (!channels.includes(id)) return res.status(404).json({ error: 'Channel not found' });
+
+  try {
+    await fetchChannelData(id);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Update failed' });
+  }
+});
+
 // Init
 (async () => {
   await loadChannels();
