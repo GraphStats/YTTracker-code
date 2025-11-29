@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Statify - Premium YouTube Tracker</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+</head>
+
+<body>
+
+  <div class="container">
+    <header>
+      <div class="logo">
+        <i class="fab fa-youtube"></i>
+        <span>Statify</span>
+      </div>
+
+      <div class="actions">
+        <div class="search-bar">
+          <i class="fas fa-search"></i>
+          <input type="text" id="searchInput" placeholder="Search channels...">
+        </div>
+        <button class="btn-primary" onclick="openAddModal()">
+          <i class="fas fa-plus"></i> Add Channel
+        </button>
+      </div>
+    </header>
+
+    <main id="channelGrid" class="channel-grid">
+      <!-- Channels will be injected here -->
+      <div class="glass channel-card"
+        style="display: flex; justify-content: center; align-items: center; min-height: 200px;">
+        <i class="fas fa-spinner fa-spin fa-2x"></i>
+      </div>
+    </main>
+
+    <footer
+      style="margin-top: 3rem; text-align: center; padding: 2rem; color: var(--text-secondary); border-top: 1px solid var(--card-border);">
+      <p>Thanks to <a href="https://skybots.tech" target="_blank"
+          style="color: var(--accent-color); text-decoration: none; font-weight: 600;">SkyBots.tech</a> for the host!
+      </p>
+    </footer>
+  </div>
+
+  <!-- Add Channel Modal -->
+  <div id="addModal" class="modal-overlay">
+    <div class="glass modal">
+      <div class="modal-header">
+        <h2>Add New Channel</h2>
+        <button class="close-btn" onclick="closeAddModal()"><i class="fas fa-times"></i></button>
+      </div>
+      <div class="modal-body">
+        <div class="search-bar" style="width: 100%; margin-bottom: 1rem;">
+          <input type="text" id="newChannelId" placeholder="Enter YouTube Channel ID (e.g., UC...)"
+            style="width: 100%;">
+        </div>
+        <button class="btn-primary" onclick="addChannel()" style="width: 100%; justify-content: center;">
+          Track Channel
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Channel Details Modal -->
+  <div id="detailsModal" class="modal-overlay">
+    <div class="glass modal" style="max-width: 1000px;">
+      <div class="modal-header">
+        <div style="display: flex; align-items: center; gap: 1rem;">
+          <img id="modalAvatar" src="" alt="" class="avatar">
+          <div>
+            <h2 id="modalName">Channel Name</h2>
+            <p id="modalId" style="color: var(--text-secondary); font-size: 0.9rem;">ID</p>
+          </div>
+        </div>
+        <button class="close-btn" onclick="closeDetailsModal()"><i class="fas fa-times"></i></button>
+      </div>
+      <div class="modal-body">
+        <div class="stats" style="display: flex; justify-content: space-around; margin-bottom: 2rem;">
+          <div>
+            <p style="color: var(--text-secondary);">Abonnés Actuels</p>
+            <h3 id="modalSubs" class="sub-count" style="font-size: 2rem;">0</h3>
+          </div>
+        </div>
+        <div style="height: 400px; width: 100%;">
+          <canvas id="growthChart"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/app.js"></script>
+</body>
+
+</html>
