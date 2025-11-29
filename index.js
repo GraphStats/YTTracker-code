@@ -224,10 +224,10 @@ async function autoScan() {
 
 // Routes API
 app.get('/api/channels', async (req, res) => {
-  const page = parseInt(req.query.page) || 1;
-  const limit = parseInt(req.query.limit) || 50;
-  const startIndex = (page - 1) * limit;
-  const endIndex = page * limit;
+  // Pagination params
+  const page = parseInt(req.query.page, 10) || 1;
+  const limit = parseInt(req.query.limit, 10) || 50;
+  const search = (req.query.search || '').toLowerCase();
 
   // Prepare all data first (needed for sorting)
   const allData = await Promise.all(channels.map(async (channelId) => {
@@ -256,17 +256,25 @@ app.get('/api/channels', async (req, res) => {
     };
   }));
 
+  // Filtrage recherche
+  let filtered = allData;
+  if (search) {
+    filtered = allData.filter(c =>
+      c.channelId.toLowerCase().includes(search) ||
+      (c.name && c.name.toLowerCase().includes(search))
+    );
+  }
+
   // Sort by subscribers (descending)
-  allData.sort((a, b) => b.subscribers - a.subscribers);
+  filtered.sort((a, b) => b.subscribers - a.subscribers);
 
   // Pagination
-  const results = {};
-  results.total = allData.length;
-  results.totalPages = Math.ceil(allData.length / limit);
-  results.page = page;
-  results.data = allData.slice(startIndex, endIndex);
+  const total = filtered.length;
+  const start = (page - 1) * limit;
+  const end = start + limit;
+  const paged = filtered.slice(start, end);
 
-  res.json(results);
+  res.json({ channels: paged, total });
 });
 
 app.post('/add-channel', async (req, res) => {

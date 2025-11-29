@@ -2,12 +2,28 @@ const API_BASE = '/api';
 let channels = [];
 let chartInstance = null;
 
+// Pagination state
+let currentPage = 1;
+const PAGE_SIZE = 50;
+let totalChannels = 0;
+let totalPages = 1;
+
 // DOM Elements
 const grid = document.getElementById('channelGrid');
 const searchInput = document.getElementById('searchInput');
 const addModal = document.getElementById('addModal');
 const detailsModal = document.getElementById('detailsModal');
 const newChannelInput = document.getElementById('newChannelId');
+
+// Pagination controls
+let paginationContainer = document.getElementById('pagination');
+if (!paginationContainer) {
+    paginationContainer = document.createElement('div');
+    paginationContainer.id = 'pagination';
+    paginationContainer.style.textAlign = 'center';
+    paginationContainer.style.margin = '1rem 0';
+    grid.parentNode.insertBefore(paginationContainer, grid.nextSibling);
+}
 
 // Initial Load
 document.addEventListener('DOMContentLoaded', () => {
@@ -24,18 +40,21 @@ document.addEventListener('DOMContentLoaded', () => {
     }, randomDuration);
 
     fetchChannels();
-    setInterval(fetchChannels, 60000); // Auto refresh every 5s
+    setInterval(() => fetchChannels(currentPage, searchInput.value), 60000); // Auto refresh every 60s
 });
 
-// Fetch Data
-async function fetchChannels() {
+// Fetch Data (paginated)
+async function fetchChannels(page = 1, search = '') {
     try {
-        const res = await fetch(`${API_BASE}/channels`);
+        let url = `${API_BASE}/channels?page=${page}&limit=${PAGE_SIZE}`;
+        if (search) url += `&search=${encodeURIComponent(search)}`;
+        const res = await fetch(url);
         const data = await res.json();
-        // Sort by subscribers (descending)
-        data.sort((a, b) => b.subscribers - a.subscribers);
-        channels = data;
-        updateGrid(filterChannels(searchInput.value));
+        channels = data.channels;
+        totalChannels = data.total;
+        totalPages = Math.ceil(totalChannels / PAGE_SIZE);
+        updateGrid(channels);
+        renderPagination();
     } catch (err) {
         console.error('Failed to fetch channels:', err);
     }
@@ -99,19 +118,70 @@ function renderGrid(data) {
     `).join('');
 }
 
+// Pagination rendering
+function renderPagination() {
+    if (totalPages <= 1) {
+        paginationContainer.innerHTML = '';
+        return;
+    }
+    // Style amélioré pour les boutons
+    const btnStyle = `
+        style="
+            background: rgba(255,255,255,0.08);
+            border: none;
+            color: #fff;
+            padding: 0.5rem 1.2rem;
+            margin: 0 0.3rem;
+            border-radius: 1.5rem;
+            font-size: 1rem;
+            font-weight: 500;
+            box-shadow: 0 2px 8px 0 rgba(0,0,0,0.08);
+            backdrop-filter: blur(6px);
+            cursor: pointer;
+            transition: background 0.2s, color 0.2s, transform 0.1s;
+        "
+        onmouseover="this.style.background='rgba(255,255,255,0.18)'"
+        onmouseout="this.style.background='rgba(255,255,255,0.08)'"
+    `;
+    const btnDisabledStyle = `
+        style="
+            background: rgba(255,255,255,0.04);
+            border: none;
+            color: #aaa;
+            padding: 0.5rem 1.2rem;
+            margin: 0 0.3rem;
+            border-radius: 1.5rem;
+            font-size: 1rem;
+            font-weight: 500;
+            box-shadow: none;
+            cursor: not-allowed;
+            opacity: 0.6;
+        "
+        disabled
+    `;
+
+    let html = `<button ${currentPage === 1 ? btnDisabledStyle : btnStyle} onclick="gotoPage(${currentPage - 1})">&lt; Précédent</button>`;
+    html += ` <span style="font-size:1.1rem;font-weight:600;color:#ff0033;vertical-align:middle;">Page ${currentPage} / ${totalPages}</span> `;
+    html += `<button ${currentPage === totalPages ? btnDisabledStyle : btnStyle} onclick="gotoPage(${currentPage + 1})">Suivant &gt;</button>`;
+    paginationContainer.innerHTML = html;
+}
+
+// Pagination navigation
+window.gotoPage = function(page) {
+    if (page < 1 || page > totalPages) return;
+    currentPage = page;
+    fetchChannels(currentPage, searchInput.value);
+};
+
 // Search
 searchInput.addEventListener('input', (e) => {
-    const filtered = filterChannels(e.target.value);
-    renderGrid(filtered); // On search, rebuild grid
+    currentPage = 1;
+    fetchChannels(currentPage, e.target.value);
 });
 
 function filterChannels(query) {
-    if (!query) return channels;
-    const lower = query.toLowerCase();
-    return channels.filter(c =>
-        c.channelId.toLowerCase().includes(lower) ||
-        (c.name && c.name.toLowerCase().includes(lower))
-    );
+    // Plus utilisé côté frontend, la recherche est côté backend
+    return channels;
 }
 
 // Add Channel
@@ -143,7 +213,7 @@ async function addChannel() {
 
         if (res.ok) {
             closeAddModal();
-            fetchChannels();
+            fetchChannels(currentPage, searchInput.value);
         } else {
             const err = await res.json();
             alert(err.error || 'Failed to add channel');
