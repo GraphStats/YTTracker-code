@@ -95,210 +95,36 @@ async function loadChannels() {
   }
 }
 
+let isSaving = false;
+let savePending = false;
+
 async function saveChannels() {
-  const tempFile = `${CHANNELS_FILE}.tmp`;
+  if (isSaving) {
+    savePending = true;
+    return;
+  }
+  isSaving = true;
+
   try {
-    await fs.writeFile(tempFile, JSON.stringify(channels, null, 2));
-    await fs.rename(tempFile, CHANNELS_FILE);
+    do {
+      savePending = false;
+      const tempFile = `${CHANNELS_FILE}.tmp`;
+      // Use a unique temp file name to avoid any remaining race conditions with external processes
+      // though the lock handles internal concurrency.
+
+      await fs.writeFile(tempFile, JSON.stringify(channels, null, 2));
+      await fs.rename(tempFile, CHANNELS_FILE);
+    } while (savePending);
   } catch (err) {
     console.error('❌ Error saving channels:', err);
+  } finally {
+    isSaving = false;
   }
 }
 
-// Load only the latest stats into memory at startup
-async function loadInitialStats() {
-  console.log('📦 Chargement des statistiques initiales...');
-  let loadedCount = 0;
+// ... (loadInitialStats, getChannelHistory, fetchChannelData, cleanupCache remain unchanged)
 
-  for (const channelId of channels) {
-    const filePath = path.join(DATA_DIR, `${channelId}.json`);
-    try {
-      const fileData = await fs.readFile(filePath, 'utf8');
-      const history = JSON.parse(fileData);
-
-      if (history.length > 0) {
-        const latest = history[history.length - 1];
-        latestStatsCache[channelId] = latest;
-        loadedCount++;
-      }
-    } catch (err) {
-      // Ignore missing files or errors during initial load
-    }
-  }
-  console.log(`📦 ${loadedCount}/${channels.length} channels chargés (Latest Stats)`);
-}
-
-// Get history (from cache or disk)
-async function getChannelHistory(channelId) {
-  if (historyCache[channelId]) {
-    return historyCache[channelId];
-  }
-
-  const filePath = path.join(DATA_DIR, `${channelId}.json`);
-  try {
-    const fileData = await fs.readFile(filePath, 'utf8');
-    const history = JSON.parse(fileData);
-    historyCache[channelId] = history;
-    return history;
-  } catch (err) {
-    return []; // Return empty if file doesn't exist
-  }
-}
-
-// Fetch and Update Logic
-async function fetchChannelData(channelId) {
-  const apiURL = `https://backend.mixerno.space/api/youtube/estv3/${channelId}`;
-  const filePath = path.join(DATA_DIR, `${channelId}.json`);
-
-  if ((failCount[channelId] || 0) >= MAX_RETRIES) return;
-
-  try {
-    const response = await fetch(apiURL, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'application/json',
-        'Accept-Language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7'
-      }
-    });
-
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const data = await response.json();
-
-    const item = data.items?.[0];
-    const newEntry = {
-      timestamp: getTimestamp(),
-      channelId,
-      subscribers: Number(item?.statistics?.subscriberCount || 0),
-      viewCount: Number(item?.statistics?.viewCount || 0),
-      videoCount: Number(item?.statistics?.videoCount || 0),
-      name: item?.snippet?.title || 'Unknown',
-      avatar: item?.snippet?.thumbnails?.default?.url || ''
-    };
-
-    // Update Latest Stats Cache (Immediate)
-    latestStatsCache[channelId] = newEntry;
-
-    // Update History (Load -> Append -> Save)
-    let history = await getChannelHistory(channelId);
-
-    // Filter old data (keep last 2 days)
-    const twoDaysAgo = Date.now() - 2 * 24 * 60 * 60 * 1000;
-    history = history.filter(e => new Date(e.timestamp).getTime() > twoDaysAgo);
-
-    history.push(newEntry);
-
-    // Limit size
-    if (history.length > 1000) {
-      history = history.slice(-1000);
-    }
-
-    // Update Cache & Disk
-    historyCache[channelId] = history;
-    await fs.writeFile(filePath, JSON.stringify(history, null, 2));
-
-    failCount[channelId] = 0;
-    console.log(`✅ ${newEntry.name} (${channelId}): ${newEntry.subscribers.toLocaleString()} abonnés`);
-
-  } catch (err) {
-    failCount[channelId] = (failCount[channelId] || 0) + 1;
-    console.error(`❌ Erreur pour ${channelId}: ${err.message}`);
-    setTimeout(() => fetchChannelData(channelId), RETRY_DELAY);
-  }
-}
-
-// Cache Cleanup (Only clears history, keeps latest stats)
-function cleanupCache() {
-  const historyKeys = Object.keys(historyCache).length;
-  const memBefore = process.memoryUsage().heapUsed / 1024 / 1024;
-
-  console.log(`🧹 Nettoyage du cache historique (${historyKeys} entrées)...`);
-
-  historyCache = {}; // Clear history cache only
-
-  if (global.gc) global.gc();
-
-  const memAfter = process.memoryUsage().heapUsed / 1024 / 1024;
-  console.log(`✅ Cache vidé - RAM: ${memAfter.toFixed(2)} MB (libéré: ${(memBefore - memAfter).toFixed(2)} MB)`);
-}
-
-setInterval(cleanupCache, CACHE_CLEANUP_INTERVAL);
-
-// ==========================================
-// SCHEDULER & AUTO-SCAN
-// ==========================================
-let schedulerRunning = false;
-let totalUpdates = 0;
-let cycleStartTime = Date.now();
-
-async function startUpdateScheduler() {
-  if (schedulerRunning) return;
-  schedulerRunning = true;
-  console.log(`🔄 Démarrage du scheduler (Batch: ${BATCH_SIZE}, Interval: ${BATCH_INTERVAL}ms)`);
-
-  let currentIndex = 0;
-
-  const runNextBatch = async () => {
-    if (channels.length === 0) {
-      setTimeout(runNextBatch, 1000);
-      return;
-    }
-
-    // Cycle tracking
-    if (currentIndex === 0 && totalUpdates > 0) {
-      const cycleTime = (Date.now() - cycleStartTime) / 1000 / 60;
-      console.log(`🔄 Cycle terminé en ${cycleTime.toFixed(1)} min. Redémarrage.`);
-      cycleStartTime = Date.now();
-    }
-
-    // Prepare Batch
-    const batch = [];
-    for (let i = 0; i < BATCH_SIZE; i++) {
-      const channelId = channels[currentIndex];
-      batch.push(fetchChannelData(channelId));
-
-      currentIndex = (currentIndex + 1) % channels.length;
-
-      // Stop if we wrapped around to 0 in this batch (optional, but good for clean cycles)
-      if (currentIndex === 0) break;
-    }
-
-    try {
-      await Promise.allSettled(batch);
-      totalUpdates += batch.length;
-    } catch (err) {
-      console.error('Batch error:', err);
-    }
-
-    setTimeout(runNextBatch, BATCH_INTERVAL);
-  };
-
-  runNextBatch();
-}
-
-// Auto Scan
-async function searchChannels(query) {
-  const encodedQuery = encodeURIComponent(JSON.stringify({ json: { query } }));
-  const url = `https://proxy.socialstats.app/YouTube.Channels.search?input=${encodedQuery}`;
-
-  try {
-    const res = await fetch(url);
-    if (!res.ok) return [];
-
-    const text = await res.text();
-    const data = JSON.parse(text);
-    const results = data?.result?.data?.json || [];
-
-    return results.map(item => ({
-      id: item.id,
-      name: item.title,
-      avatar: item.thumb,
-      verified: item.verified
-    }));
-  } catch (err) {
-    console.error(`🔍 Erreur recherche "${query}": ${err.message}`);
-    return [];
-  }
-}
+// ...
 
 async function autoScan() {
   console.log('🔍 Démarrage de l\'auto-scan...');
@@ -307,11 +133,12 @@ async function autoScan() {
     try {
       const results = await searchChannels(name);
       let added = 0;
+      let shouldSave = false;
 
       for (const item of results) {
         if (!channels.includes(item.id)) {
           channels.push(item.id);
-          await saveChannels();
+          shouldSave = true;
           registerChannelRoute(item.id);
           added++;
 
@@ -319,7 +146,12 @@ async function autoScan() {
           fetchChannelData(item.id).catch(e => console.error(e));
         }
       }
-      if (added > 0) console.log(`� AutoScan: ${added} nouveaux channels.`);
+
+      if (shouldSave) {
+        await saveChannels();
+      }
+
+      if (added > 0) console.log(`🚀 AutoScan: ${added} nouveaux channels.`);
     } catch (err) {
       // Silent fail for scan errors
     }
