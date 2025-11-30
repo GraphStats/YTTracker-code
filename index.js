@@ -11,8 +11,8 @@ const PORT = 30056;
 const DATA_DIR = path.join(__dirname, 'data');
 const CHANNELS_FILE = path.join(__dirname, 'channels.json');
 
-const SEARCH_INTERVAL = 30000; // 30 secondes entre chaque recherche auto
-const REFRESH_INTERVAL = 5000; // 5 secondes de délai entre chaque channel (scheduler)
+const SEARCH_INTERVAL = 3000; // 3 secondes entre chaque recherche auto
+const REFRESH_INTERVAL = 300; // 5 secondes de délai entre chaque channel (scheduler)
 const RETRY_DELAY = 60000;     // 1 minute avant retry en cas d'erreur
 const MAX_RETRIES = 5;
 const CACHE_CLEANUP_INTERVAL = 15 * 60 * 1000; // 15 minutes
