@@ -12,7 +12,8 @@ const DATA_DIR = path.join(__dirname, 'data');
 const CHANNELS_FILE = path.join(__dirname, 'channels.json');
 
 const SEARCH_INTERVAL = 3000; // 3 secondes entre chaque recherche auto
-const REFRESH_INTERVAL = 300; // 5 secondes de délai entre chaque channel (scheduler)
+const BATCH_SIZE = 5;         // Nombre de requêtes en parallèle
+const BATCH_INTERVAL = 1000;  // Délai entre chaque batch (1 seconde)
 const RETRY_DELAY = 60000;     // 1 minute avant retry en cas d'erreur
 const MAX_RETRIES = 5;
 const CACHE_CLEANUP_INTERVAL = 15 * 60 * 1000; // 15 minutes
@@ -196,13 +197,13 @@ let cycleStartTime = Date.now();
 async function startUpdateScheduler() {
   if (schedulerRunning) return;
   schedulerRunning = true;
-  console.log(`🔄 Démarrage du scheduler pour ${channels.length} channels...`);
+  console.log(`🔄 Démarrage du scheduler (Batch: ${BATCH_SIZE}, Interval: ${BATCH_INTERVAL}ms)`);
 
   let currentIndex = 0;
 
-  const runNextUpdate = async () => {
+  const runNextBatch = async () => {
     if (channels.length === 0) {
-      setTimeout(runNextUpdate, 1000);
+      setTimeout(runNextBatch, 1000);
       return;
     }
 
@@ -213,20 +214,29 @@ async function startUpdateScheduler() {
       cycleStartTime = Date.now();
     }
 
-    const channelId = channels[currentIndex];
-    currentIndex = (currentIndex + 1) % channels.length;
+    // Prepare Batch
+    const batch = [];
+    for (let i = 0; i < BATCH_SIZE; i++) {
+      const channelId = channels[currentIndex];
+      batch.push(fetchChannelData(channelId));
 
-    try {
-      await fetchChannelData(channelId);
-      totalUpdates++;
-    } catch (err) {
-      console.error(`Scheduler error for ${channelId}:`, err);
+      currentIndex = (currentIndex + 1) % channels.length;
+
+      // Stop if we wrapped around to 0 in this batch (optional, but good for clean cycles)
+      if (currentIndex === 0) break;
     }
 
-    setTimeout(runNextUpdate, REFRESH_INTERVAL);
+    try {
+      await Promise.allSettled(batch);
+      totalUpdates += batch.length;
+    } catch (err) {
+      console.error('Batch error:', err);
+    }
+
+    setTimeout(runNextBatch, BATCH_INTERVAL);
   };
 
-  runNextUpdate();
+  runNextBatch();
 }
 
 // Auto Scan
