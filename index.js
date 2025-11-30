@@ -1,54 +1,76 @@
 const express = require('express');
-const fs = require('fs/promises'); // version async
+const fs = require('fs/promises');
 const fetch = require('node-fetch');
 const cors = require('cors');
 const path = require('path');
 
+// ==========================================
+// CONFIGURATION & CONSTANTS
+// ==========================================
+const PORT = 30056;
+const DATA_DIR = path.join(__dirname, 'data');
+const CHANNELS_FILE = path.join(__dirname, 'channels.json');
+
+const SEARCH_INTERVAL = 30000; // 30 secondes entre chaque recherche auto
+const REFRESH_INTERVAL = 5000; // 5 secondes de délai entre chaque channel (scheduler)
+const RETRY_DELAY = 60000;     // 1 minute avant retry en cas d'erreur
+const MAX_RETRIES = 5;
+const CACHE_CLEANUP_INTERVAL = 15 * 60 * 1000; // 15 minutes
+
 const app = express();
 app.use(cors());
 app.use(express.json());
+app.use(express.static(path.join(__dirname, 'public')));
 
-const PORT = 30056;
-const DATA_DIR = path.join(__dirname, 'data');
-const SEARCH_INTERVAL = 30000; // 30 secondes entre chaque recherche
-const REFRESH_INTERVAL = 5000; // 5 secondes de délai entre chaque channel
-const RETRY_DELAY = 60000; // 1 minute avant retry
-const MAX_RETRIES = 5;
-
-fs.mkdir(DATA_DIR, { recursive: true });
-
+// ==========================================
+// STATE MANAGEMENT
+// ==========================================
 let channels = [];
 let failCount = {};
-let channelDataCache = {}; // cache en mémoire pour éviter fs à chaque fois
-const registeredRoutes = new Set(); // stocke les routes déjà créées
 
-// Chargement des channels
+// Cache Split Strategy:
+// 1. latestStatsCache: Always in memory. Contains ONLY the latest snapshot for listing/sorting.
+// 2. historyCache: Loaded on demand. Contains full history arrays. Cleared periodically.
+let latestStatsCache = {};
+let historyCache = {};
+const registeredRoutes = new Set();
+
+// ==========================================
+// HELPER FUNCTIONS
+// ==========================================
+function getTimestamp() {
+  return new Date().toISOString();
+}
+
+function generateRandomName() {
+  const chars = 'abcdefghijklmnopqrstuvwxyz@!1234567890';
+  return Array.from({ length: Math.floor(Math.random() * 60) + 1 },
+    () => chars[Math.floor(Math.random() * chars.length)]).join('');
+}
+
+// ==========================================
+// CORE DATA LOGIC
+// ==========================================
+
+// Ensure Data Directory Exists
+fs.mkdir(DATA_DIR, { recursive: true }).catch(console.error);
+
 async function loadChannels() {
   try {
-    const file = path.join(__dirname, 'channels.json');
-    const data = await fs.readFile(file, 'utf8');
+    const data = await fs.readFile(CHANNELS_FILE, 'utf8');
     channels = JSON.parse(data);
   } catch {
     channels = [];
   }
 }
 
-// Sauvegarde channels
 async function saveChannels() {
-  await fs.writeFile(path.join(__dirname, 'channels.json'), JSON.stringify(channels, null, 2));
+  await fs.writeFile(CHANNELS_FILE, JSON.stringify(channels, null, 2));
 }
 
-function getTimestamp() {
-  return new Date().toISOString();
-}
-
-function isRouteAlreadyRegistered(routePath) {
-  return registeredRoutes.has(routePath);
-}
-
-// Charger toutes les données existantes des fichiers JSON au démarrage
-async function loadAllChannelData() {
-  console.log('📦 Chargement des données existantes...');
+// Load only the latest stats into memory at startup
+async function loadInitialStats() {
+  console.log('📦 Chargement des statistiques initiales...');
   let loadedCount = 0;
 
   for (const channelId of channels) {
@@ -56,23 +78,42 @@ async function loadAllChannelData() {
     try {
       const fileData = await fs.readFile(filePath, 'utf8');
       const history = JSON.parse(fileData);
-      channelDataCache[channelId] = history;
-      loadedCount++;
-      console.log(`  ✅ ${channelId}: ${history.length} entrées chargées`);
+
+      if (history.length > 0) {
+        const latest = history[history.length - 1];
+        latestStatsCache[channelId] = latest;
+        loadedCount++;
+      }
     } catch (err) {
-      console.log(`  ⚠️ ${channelId}: Aucune donnée existante`);
+      // Ignore missing files or errors during initial load
     }
   }
-
-  console.log(`📦 ${loadedCount}/${channels.length} channels chargés en cache`);
+  console.log(`📦 ${loadedCount}/${channels.length} channels chargés (Latest Stats)`);
 }
 
-// Fonction unique pour fetch les données et mettre à jour cache + fichier
+// Get history (from cache or disk)
+async function getChannelHistory(channelId) {
+  if (historyCache[channelId]) {
+    return historyCache[channelId];
+  }
+
+  const filePath = path.join(DATA_DIR, `${channelId}.json`);
+  try {
+    const fileData = await fs.readFile(filePath, 'utf8');
+    const history = JSON.parse(fileData);
+    historyCache[channelId] = history;
+    return history;
+  } catch (err) {
+    return []; // Return empty if file doesn't exist
+  }
+}
+
+// Fetch and Update Logic
 async function fetchChannelData(channelId) {
   const apiURL = `https://backend.mixerno.space/api/youtube/estv3/${channelId}`;
   const filePath = path.join(DATA_DIR, `${channelId}.json`);
 
-  if (failCount[channelId] >= MAX_RETRIES) return;
+  if ((failCount[channelId] || 0) >= MAX_RETRIES) return;
 
   try {
     const response = await fetch(apiURL, {
@@ -82,6 +123,7 @@ async function fetchChannelData(channelId) {
         'Accept-Language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7'
       }
     });
+
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
 
@@ -96,41 +138,30 @@ async function fetchChannelData(channelId) {
       avatar: item?.snippet?.thumbnails?.default?.url || ''
     };
 
-    // Charger l'historique existant du fichier si le cache est vide
-    let history = channelDataCache[channelId];
-    if (!history) {
-      try {
-        const fileData = await fs.readFile(filePath, 'utf8');
-        history = JSON.parse(fileData);
-        console.log(`📂 Chargé ${history.length} entrées depuis le fichier pour ${channelId}`);
-      } catch (err) {
-        console.log(`📄 Nouveau fichier pour ${channelId}`);
-        history = []; // Fichier n'existe pas encore
-      }
-    }
+    // Update Latest Stats Cache (Immediate)
+    latestStatsCache[channelId] = newEntry;
 
-    const beforeFilter = history.length;
+    // Update History (Load -> Append -> Save)
+    let history = await getChannelHistory(channelId);
+
+    // Filter old data (keep last 2 days)
     const twoDaysAgo = Date.now() - 2 * 24 * 60 * 60 * 1000;
     history = history.filter(e => new Date(e.timestamp).getTime() > twoDaysAgo);
-    const afterFilter = history.length;
-
-    if (beforeFilter !== afterFilter) {
-      console.log(`🗑️ Filtré ${beforeFilter - afterFilter} entrées anciennes pour ${channelId}`);
-    }
 
     history.push(newEntry);
 
-    // Limiter à 1000 entrées max pour éviter la surcharge mémoire
+    // Limit size
     if (history.length > 1000) {
-      history = history.slice(-1000); // Garde les 1000 dernières
-      console.log(`⚠️ Historique tronqué à 1000 entrées pour ${channelId}`);
+      history = history.slice(-1000);
     }
 
-    channelDataCache[channelId] = history;
+    // Update Cache & Disk
+    historyCache[channelId] = history;
     await fs.writeFile(filePath, JSON.stringify(history, null, 2));
 
     failCount[channelId] = 0;
     console.log(`✅ ${newEntry.name} (${channelId}): ${newEntry.subscribers.toLocaleString()} abonnés`);
+
   } catch (err) {
     failCount[channelId] = (failCount[channelId] || 0) + 1;
     console.error(`❌ Erreur pour ${channelId}: ${err.message}`);
@@ -138,64 +169,34 @@ async function fetchChannelData(channelId) {
   }
 }
 
-// Nettoyage automatique du cache pour éviter la fuite mémoire
+// Cache Cleanup (Only clears history, keeps latest stats)
 function cleanupCache() {
-  const cacheSize = Object.keys(channelDataCache).length;
+  const historyKeys = Object.keys(historyCache).length;
   const memBefore = process.memoryUsage().heapUsed / 1024 / 1024;
 
-  console.log(`🧹 Nettoyage du cache (${cacheSize} channels, ${memBefore.toFixed(2)} MB utilisés)`);
+  console.log(`🧹 Nettoyage du cache historique (${historyKeys} entrées)...`);
 
-  channelDataCache = {}; // Vide complètement le cache
+  historyCache = {}; // Clear history cache only
 
-  // Forcer le garbage collector si disponible
-  if (global.gc) {
-    global.gc();
-  }
+  if (global.gc) global.gc();
 
   const memAfter = process.memoryUsage().heapUsed / 1024 / 1024;
   console.log(`✅ Cache vidé - RAM: ${memAfter.toFixed(2)} MB (libéré: ${(memBefore - memAfter).toFixed(2)} MB)`);
 }
 
-// Lancer le nettoyage toutes les 15 minutes (au lieu de 1h)
-setInterval(cleanupCache, 15 * 60 * 1000); // 15 minutes
+setInterval(cleanupCache, CACHE_CLEANUP_INTERVAL);
 
-
-
-// Setup route UNIQUEMENT (pas de timer ici)
-function registerChannelRoute(channelId) {
-  const routePath = `/data/${channelId}`;
-
-  if (isRouteAlreadyRegistered(routePath)) {
-    return;
-  }
-
-  // On enregistre la route
-  registeredRoutes.add(routePath);
-
-  const filePath = path.join(DATA_DIR, `${channelId}.json`);
-  app.get(routePath, async (req, res) => {
-    try {
-      const data = channelDataCache[channelId] || await fs.readFile(filePath, 'utf8');
-      res.send(data);
-    } catch {
-      res.status(404).json({ error: 'Data not found' });
-    }
-  });
-}
-
-// Scheduler centralisé - UN SEUL timer pour TOUS les channels
+// ==========================================
+// SCHEDULER & AUTO-SCAN
+// ==========================================
 let schedulerRunning = false;
 let totalUpdates = 0;
 let cycleStartTime = Date.now();
 
 async function startUpdateScheduler() {
-  if (schedulerRunning) {
-    console.log('⚠️ Scheduler déjà en cours, ignorer');
-    return;
-  }
+  if (schedulerRunning) return;
   schedulerRunning = true;
-  console.log(`🔄 Démarrage du scheduler centralisé pour ${channels.length} channels...`);
-  console.log(`⏱️ Temps estimé pour un cycle complet: ${Math.round(channels.length * REFRESH_INTERVAL / 1000 / 60)} minutes`);
+  console.log(`🔄 Démarrage du scheduler pour ${channels.length} channels...`);
 
   let currentIndex = 0;
 
@@ -205,17 +206,10 @@ async function startUpdateScheduler() {
       return;
     }
 
-    // Log de progression tous les 100 channels
-    if (currentIndex % 100 === 0 && currentIndex > 0) {
-      const elapsed = (Date.now() - cycleStartTime) / 1000;
-      const progress = ((currentIndex / channels.length) * 100).toFixed(1);
-      console.log(`📊 Progression: ${currentIndex}/${channels.length} (${progress}%) - ${totalUpdates} mises à jour - ${elapsed.toFixed(0)}s écoulées`);
-    }
-
-    // Début d'un nouveau cycle
+    // Cycle tracking
     if (currentIndex === 0 && totalUpdates > 0) {
       const cycleTime = (Date.now() - cycleStartTime) / 1000 / 60;
-      console.log(`🔄 Nouveau cycle démarré - Cycle précédent: ${cycleTime.toFixed(1)} minutes`);
+      console.log(`🔄 Cycle terminé en ${cycleTime.toFixed(1)} min. Redémarrage.`);
       cycleStartTime = Date.now();
     }
 
@@ -235,38 +229,17 @@ async function startUpdateScheduler() {
   runNextUpdate();
 }
 
-// Génération de noms aléatoires
-function generateRandomName() {
-  const chars = 'abcdefghijklmnopqrstuvwxyz@!1234567890';
-  return Array.from({ length: Math.floor(Math.random() * 60) + 1 },
-    () => chars[Math.floor(Math.random() * chars.length)]).join('');
-}
-
-// Recherche via API externe
+// Auto Scan
 async function searchChannels(query) {
   const encodedQuery = encodeURIComponent(JSON.stringify({ json: { query } }));
   const url = `https://proxy.socialstats.app/YouTube.Channels.search?input=${encodedQuery}`;
 
   try {
     const res = await fetch(url);
-
-    if (!res.ok) {
-      if (res.status === 429) {
-        console.warn(`⏳ Rate limit hit for search "${query}" (429). Skipping.`);
-        return [];
-      }
-      throw new Error(`HTTP ${res.status}`);
-    }
+    if (!res.ok) return [];
 
     const text = await res.text();
-    let data;
-    try {
-      data = JSON.parse(text);
-    } catch (e) {
-      throw new Error(`Invalid JSON response: ${text.substring(0, 50)}...`);
-    }
-
-    // Parsing de la réponse spécifique
+    const data = JSON.parse(text);
     const results = data?.result?.data?.json || [];
 
     return results.map(item => ({
@@ -281,150 +254,93 @@ async function searchChannels(query) {
   }
 }
 
-// Auto scan (modifié pour utiliser la nouvelle API avec des termes aléatoires)
-let autoScanRunning = false;
-let newChannelsFound = 0;
-
 async function autoScan() {
-  if (autoScanRunning) {
-    console.log('⚠️ AutoScan déjà en cours, ignorer');
-    return;
-  }
-  autoScanRunning = true;
   console.log('🔍 Démarrage de l\'auto-scan...');
-
   setInterval(async () => {
-    const name = generateRandomName().substring(0, 3); // Recherche courte pour plus de résultats
+    const name = generateRandomName().substring(0, 3);
     try {
       const results = await searchChannels(name);
-      let addedInThisScan = 0;
+      let added = 0;
 
       for (const item of results) {
         if (!channels.includes(item.id)) {
           channels.push(item.id);
           await saveChannels();
           registerChannelRoute(item.id);
-          newChannelsFound++;
-          addedInThisScan++;
+          added++;
 
-          console.log(`📡 Nouveau channel #${newChannelsFound}: ${item.name} (${item.id})`);
-
-          // IMPORTANT: Récupérer immédiatement les données du nouveau channel
-          try {
-            await fetchChannelData(item.id);
-          } catch (fetchErr) {
-            console.error(`❌ Erreur lors de la récupération des données pour ${item.id}: ${fetchErr.message}`);
-          }
+          // Fetch initial data immediately
+          fetchChannelData(item.id).catch(e => console.error(e));
         }
       }
-
-      if (addedInThisScan > 0) {
-        console.log(`🔍 Scan terminé: ${addedInThisScan} nouveaux channels ajoutés (Total: ${channels.length})`);
-      }
+      if (added > 0) console.log(`� AutoScan: ${added} nouveaux channels.`);
     } catch (err) {
-      console.error(`🔍 Erreur autoScan "${name}": ${err.message}`);
+      // Silent fail for scan errors
     }
   }, SEARCH_INTERVAL);
 }
 
-// Route de recherche pour le frontend
-app.get('/api/search', async (req, res) => {
-  const query = req.query.q;
-  if (!query) return res.json({ results: [] });
+// ==========================================
+// ROUTES
+// ==========================================
 
-  const results = await searchChannels(query);
-  res.json({ results });
-});
+// Dynamic Route Registration
+function registerChannelRoute(channelId) {
+  const routePath = `/data/${channelId}`;
+  if (registeredRoutes.has(routePath)) return;
+  registeredRoutes.add(routePath);
 
-// Route pour les statistiques globales
-app.get('/api/stats', async (req, res) => {
-  try {
-    let totalSubscribers = 0;
-    let totalChannels = channels.length;
-
-    // Calculer le total des abonnés
-    for (const channelId of channels) {
-      let history = channelDataCache[channelId];
-
-      if (!history || history.length === 0) {
-        const filePath = path.join(DATA_DIR, `${channelId}.json`);
-        try {
-          const fileData = await fs.readFile(filePath, 'utf8');
-          history = JSON.parse(fileData);
-        } catch {
-          history = [];
-        }
-      }
-
-      const latest = history[history.length - 1];
-      if (latest && latest.subscribers) {
-        totalSubscribers += latest.subscribers;
-      }
+  app.get(routePath, async (req, res) => {
+    try {
+      const data = await getChannelHistory(channelId);
+      res.send(data);
+    } catch {
+      res.status(404).json({ error: 'Data not found' });
     }
+  });
+}
 
-    res.json({
-      totalChannels,
-      totalSubscribers
-    });
-  } catch (err) {
-    console.error('Error fetching stats:', err);
-    res.status(500).json({ error: 'Failed to fetch stats' });
-  }
-});
-
-// Routes API
-app.get('/api/channels', async (req, res) => {
-  // Pagination params
+// Main List API (Optimized)
+app.get('/api/channels', (req, res) => {
   const page = parseInt(req.query.page, 10) || 1;
   const limit = parseInt(req.query.limit, 10) || 50;
   const search = (req.query.search || '').toLowerCase();
 
-  // Prepare all data first (needed for sorting)
-  const allData = await Promise.all(channels.map(async (channelId) => {
-    let history = channelDataCache[channelId];
+  // 1. Convert Cache to Array
+  let allData = Object.values(latestStatsCache);
 
-    if (!history || history.length === 0) {
-      const filePath = path.join(DATA_DIR, `${channelId}.json`);
-      try {
-        const fileData = await fs.readFile(filePath, 'utf8');
-        history = JSON.parse(fileData);
-        channelDataCache[channelId] = history;
-      } catch {
-        history = [];
-      }
-    }
-
-    const latest = history[history.length - 1] || {};
-    return {
-      channelId,
-      subscribers: latest.subscribers || 0,
-      viewCount: latest.viewCount || 0,
-      videoCount: latest.videoCount || 0,
-      timestamp: latest.timestamp || 'N/A',
-      name: latest.name || channelId,
-      avatar: latest.avatar || ''
-    };
-  }));
-
-  // Filtrage recherche
-  let filtered = allData;
+  // 2. Filter
   if (search) {
-    filtered = allData.filter(c =>
-      c.channelId.toLowerCase().includes(search) ||
+    allData = allData.filter(c =>
+      (c.channelId && c.channelId.toLowerCase().includes(search)) ||
       (c.name && c.name.toLowerCase().includes(search))
     );
   }
 
-  // Sort by subscribers (descending)
-  filtered.sort((a, b) => b.subscribers - a.subscribers);
+  // 3. Sort
+  allData.sort((a, b) => b.subscribers - a.subscribers);
 
-  // Pagination
-  const total = filtered.length;
+  // 4. Paginate
+  const total = allData.length;
   const start = (page - 1) * limit;
-  const end = start + limit;
-  const paged = filtered.slice(start, end);
+  const paged = allData.slice(start, start + limit);
 
   res.json({ channels: paged, total });
+});
+
+app.get('/api/search', async (req, res) => {
+  const query = req.query.q;
+  if (!query) return res.json({ results: [] });
+  const results = await searchChannels(query);
+  res.json({ results });
+});
+
+app.get('/api/stats', (req, res) => {
+  const totalChannels = channels.length;
+  const totalSubscribers = Object.values(latestStatsCache)
+    .reduce((sum, c) => sum + (c.subscribers || 0), 0);
+
+  res.json({ totalChannels, totalSubscribers });
 });
 
 app.post('/add-channel', async (req, res) => {
@@ -435,6 +351,10 @@ app.post('/add-channel', async (req, res) => {
   channels.push(id);
   await saveChannels();
   registerChannelRoute(id);
+
+  // Trigger fetch
+  fetchChannelData(id);
+
   res.json({ success: true, route: `/data/${id}` });
 });
 
@@ -450,26 +370,21 @@ app.post('/api/update/:id', async (req, res) => {
   }
 });
 
-// Init
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
+
+// ==========================================
+// INITIALIZATION
+// ==========================================
 (async () => {
   await loadChannels();
+  await loadInitialStats();
 
-  // Charger toutes les données existantes AVANT de fetcher de nouvelles données
-  await loadAllChannelData();
+  // Register routes
+  channels.forEach(registerChannelRoute);
 
-  // Setup des routes pour tous les channels
-  channels.forEach(channelId => {
-    registerChannelRoute(channelId);
-  });
-
-  // Lancer le scheduler centralisé (UN SEUL timer pour tous)
+  // Start background tasks
   startUpdateScheduler();
-
   autoScan();
 
   app.listen(PORT, () => console.log(`🚀 Serveur lancé sur http://localhost:${PORT}`));
 })();
-
-app.use(express.static(path.join(__dirname, 'public')));
-
-app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
