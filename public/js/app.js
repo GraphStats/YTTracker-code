@@ -167,7 +167,7 @@ function renderPagination() {
 }
 
 // Pagination navigation
-window.gotoPage = function(page) {
+window.gotoPage = function (page) {
     if (page < 1 || page > totalPages) return;
     currentPage = page;
     fetchChannels(currentPage, searchInput.value);
@@ -187,12 +187,65 @@ function filterChannels(query) {
 // Add Channel
 function openAddModal() {
     addModal.classList.add('active');
-    newChannelInput.focus();
+    document.getElementById('newChannelSearch').focus();
 }
 
 function closeAddModal() {
     addModal.classList.remove('active');
     newChannelInput.value = '';
+    document.getElementById('newChannelSearch').value = '';
+    document.getElementById('searchResults').innerHTML = '';
+}
+
+// Search for new channels
+const newChannelSearch = document.getElementById('newChannelSearch');
+let searchTimeout;
+
+if (newChannelSearch) {
+    newChannelSearch.addEventListener('input', (e) => {
+        clearTimeout(searchTimeout);
+        const query = e.target.value.trim();
+
+        if (query.length < 2) {
+            document.getElementById('searchResults').innerHTML = '';
+            return;
+        }
+
+        searchTimeout = setTimeout(async () => {
+            try {
+                const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+                const data = await res.json();
+                renderSearchResults(data.results);
+            } catch (e) {
+                console.error('Search failed', e);
+            }
+        }, 500);
+    });
+}
+
+function renderSearchResults(results) {
+    const container = document.getElementById('searchResults');
+    if (!results || results.length === 0) {
+        container.innerHTML = '<div style="text-align:center; padding:1rem; color:var(--text-secondary);">No results found</div>';
+        return;
+    }
+
+    container.innerHTML = results.map(channel => `
+        <div class="search-result-item" onclick="selectChannel('${channel.id}')" 
+             style="display:flex; align-items:center; padding:0.5rem; cursor:pointer; border-bottom:1px solid rgba(255,255,255,0.05); transition:background 0.2s;">
+            <img src="${channel.avatar}" style="width:40px; height:40px; border-radius:50%; margin-right:1rem;">
+            <div>
+                <div style="font-weight:600;">${channel.name} ${channel.verified ? '<i class="fas fa-check-circle" style="color:#aaa; font-size:0.8em;"></i>' : ''}</div>
+                <div style="font-size:0.8rem; color:var(--text-secondary);">${channel.id}</div>
+            </div>
+            <i class="fas fa-plus" style="margin-left:auto; color:var(--primary-color);"></i>
+        </div>
+    `).join('');
+}
+
+function selectChannel(id) {
+    newChannelInput.value = id;
+    addChannel();
 }
 
 async function addChannel() {

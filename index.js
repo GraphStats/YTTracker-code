@@ -10,8 +10,8 @@ app.use(express.json());
 
 const PORT = 30056;
 const DATA_DIR = path.join(__dirname, 'data');
-const SEARCH_INTERVAL = 50000;
-const REFRESH_INTERVAL = 120000;
+const SEARCH_INTERVAL = 1000;
+const REFRESH_INTERVAL = 30000;
 const RETRY_DELAY = 30000;
 const MAX_RETRIES = 5;
 
@@ -192,35 +192,78 @@ function setupChannel(channelId, delayMs = 0) {
 
 // Génération de noms aléatoires
 function generateRandomName() {
-  const chars = 'abcdefghijklmnopqrstuvwxyz';
+  const chars = 'abcdefghijklmnopqrstuvwxyz@!1234567890';
   return Array.from({ length: Math.floor(Math.random() * 60) + 1 },
     () => chars[Math.floor(Math.random() * chars.length)]).join('');
 }
 
-// Auto scan
+// Recherche via API externe
+async function searchChannels(query) {
+  const encodedQuery = encodeURIComponent(JSON.stringify({ json: { query } }));
+  const url = `https://proxy.socialstats.app/YouTube.Channels.search?input=${encodedQuery}`;
+
+  try {
+    const res = await fetch(url);
+
+    if (!res.ok) {
+      if (res.status === 429) {
+        console.warn(`⏳ Rate limit hit for search "${query}" (429). Skipping.`);
+        return [];
+      }
+      throw new Error(`HTTP ${res.status}`);
+    }
+
+    const text = await res.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch (e) {
+      throw new Error(`Invalid JSON response: ${text.substring(0, 50)}...`);
+    }
+
+    // Parsing de la réponse spécifique
+    const results = data?.result?.data?.json || [];
+
+    return results.map(item => ({
+      id: item.id,
+      name: item.title,
+      avatar: item.thumb,
+      verified: item.verified
+    }));
+  } catch (err) {
+    console.error(`🔍 Erreur recherche "${query}": ${err.message}`);
+    return [];
+  }
+}
+
+// Auto scan (modifié pour utiliser la nouvelle API avec des termes aléatoires)
 async function autoScan() {
   setInterval(async () => {
-    const name = generateRandomName();
-    const url = `https://mixerno.space/api/youtube-channel-counter/search/${name}`;
+    const name = generateRandomName().substring(0, 3); // Recherche courte pour plus de résultats
     try {
-      const res = await fetch(url);
-      const data = await res.json();
-      if (Array.isArray(data.list)) {
-        for (const item of data.list) {
-          const id = item[2];
-          if (!channels.includes(id)) {
-            channels.push(id);
-            await saveChannels();
-            setupChannel(id);
-            console.log(`📡 Ajout auto : ${item[0]} (${id})`);
-          }
+      const results = await searchChannels(name);
+      for (const item of results) {
+        if (!channels.includes(item.id)) {
+          channels.push(item.id);
+          await saveChannels();
+          setupChannel(item.id);
+          console.log(`📡 Ajout auto : ${item.name} (${item.id})`);
         }
       }
     } catch (err) {
-      console.error(`🔍 Erreur recherche "${name}": ${err.message}`);
+      console.error(`🔍 Erreur autoScan "${name}": ${err.message}`);
     }
   }, SEARCH_INTERVAL);
 }
+
+// Route de recherche pour le frontend
+app.get('/api/search', async (req, res) => {
+  const query = req.query.q;
+  if (!query) return res.json({ results: [] });
+
+  const results = await searchChannels(query);
+  res.json({ results });
+});
 
 // Routes API
 app.get('/api/channels', async (req, res) => {
