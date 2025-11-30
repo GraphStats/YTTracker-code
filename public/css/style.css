@@ -70,6 +70,56 @@ header {
   filter: drop-shadow(0 0 10px var(--accent-glow));
 }
 
+/* Global Stats */
+.global-stats {
+  display: flex;
+  gap: 1.5rem;
+  margin: 1.5rem 0;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.stat-card {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem 1.5rem;
+  min-width: 200px;
+  transition: var(--transition-speed);
+}
+
+.stat-card:hover {
+  transform: translateY(-3px);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.stat-card i {
+  font-size: 2rem;
+  color: var(--accent-color);
+  filter: drop-shadow(0 0 8px var(--accent-glow));
+}
+
+.stat-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.stat-label {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.stat-value {
+  font-size: 1.8rem;
+  font-weight: 800;
+  color: var(--text-primary);
+  font-family: 'Roboto Black', Tahoma, Geneva, Verdana, sans-serif;
+}
+
 /* Search & Add */
 .actions {
   display: flex;

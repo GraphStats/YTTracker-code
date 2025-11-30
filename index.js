@@ -10,9 +10,9 @@ app.use(express.json());
 
 const PORT = 30056;
 const DATA_DIR = path.join(__dirname, 'data');
-const SEARCH_INTERVAL = 1000;
-const REFRESH_INTERVAL = 30000;
-const RETRY_DELAY = 30000;
+const SEARCH_INTERVAL = 30000; // 30 secondes entre chaque recherche
+const REFRESH_INTERVAL = 5000; // 5 secondes de délai entre chaque channel
+const RETRY_DELAY = 60000; // 1 minute avant retry
 const MAX_RETRIES = 5;
 
 fs.mkdir(DATA_DIR, { recursive: true });
@@ -130,7 +130,7 @@ async function fetchChannelData(channelId) {
     await fs.writeFile(filePath, JSON.stringify(history, null, 2));
 
     failCount[channelId] = 0;
-    console.log(`📈 Donnée ajoutée pour ${channelId}`);
+    console.log(`✅ ${newEntry.name} (${channelId}): ${newEntry.subscribers.toLocaleString()} abonnés`);
   } catch (err) {
     failCount[channelId] = (failCount[channelId] || 0) + 1;
     console.error(`❌ Erreur pour ${channelId}: ${err.message}`);
@@ -185,13 +185,17 @@ function registerChannelRoute(channelId) {
 
 // Scheduler centralisé - UN SEUL timer pour TOUS les channels
 let schedulerRunning = false;
+let totalUpdates = 0;
+let cycleStartTime = Date.now();
+
 async function startUpdateScheduler() {
   if (schedulerRunning) {
     console.log('⚠️ Scheduler déjà en cours, ignorer');
     return;
   }
   schedulerRunning = true;
-  console.log('🔄 Démarrage du scheduler centralisé...');
+  console.log(`🔄 Démarrage du scheduler centralisé pour ${channels.length} channels...`);
+  console.log(`⏱️ Temps estimé pour un cycle complet: ${Math.round(channels.length * REFRESH_INTERVAL / 1000 / 60)} minutes`);
 
   let currentIndex = 0;
 
@@ -201,19 +205,31 @@ async function startUpdateScheduler() {
       return;
     }
 
-    // Délai entre chaque channel pour répartir la charge
-    const delayBetweenChannels = Math.max(200, Math.floor(REFRESH_INTERVAL / channels.length));
+    // Log de progression tous les 100 channels
+    if (currentIndex % 100 === 0 && currentIndex > 0) {
+      const elapsed = (Date.now() - cycleStartTime) / 1000;
+      const progress = ((currentIndex / channels.length) * 100).toFixed(1);
+      console.log(`📊 Progression: ${currentIndex}/${channels.length} (${progress}%) - ${totalUpdates} mises à jour - ${elapsed.toFixed(0)}s écoulées`);
+    }
+
+    // Début d'un nouveau cycle
+    if (currentIndex === 0 && totalUpdates > 0) {
+      const cycleTime = (Date.now() - cycleStartTime) / 1000 / 60;
+      console.log(`🔄 Nouveau cycle démarré - Cycle précédent: ${cycleTime.toFixed(1)} minutes`);
+      cycleStartTime = Date.now();
+    }
 
     const channelId = channels[currentIndex];
     currentIndex = (currentIndex + 1) % channels.length;
 
     try {
       await fetchChannelData(channelId);
+      totalUpdates++;
     } catch (err) {
       console.error(`Scheduler error for ${channelId}:`, err);
     }
 
-    setTimeout(runNextUpdate, delayBetweenChannels);
+    setTimeout(runNextUpdate, REFRESH_INTERVAL);
   };
 
   runNextUpdate();
@@ -267,6 +283,8 @@ async function searchChannels(query) {
 
 // Auto scan (modifié pour utiliser la nouvelle API avec des termes aléatoires)
 let autoScanRunning = false;
+let newChannelsFound = 0;
+
 async function autoScan() {
   if (autoScanRunning) {
     console.log('⚠️ AutoScan déjà en cours, ignorer');
@@ -279,13 +297,29 @@ async function autoScan() {
     const name = generateRandomName().substring(0, 3); // Recherche courte pour plus de résultats
     try {
       const results = await searchChannels(name);
+      let addedInThisScan = 0;
+
       for (const item of results) {
         if (!channels.includes(item.id)) {
           channels.push(item.id);
           await saveChannels();
           registerChannelRoute(item.id);
-          console.log(`📡 Ajout auto : ${item.name} (${item.id})`);
+          newChannelsFound++;
+          addedInThisScan++;
+
+          console.log(`📡 Nouveau channel #${newChannelsFound}: ${item.name} (${item.id})`);
+
+          // IMPORTANT: Récupérer immédiatement les données du nouveau channel
+          try {
+            await fetchChannelData(item.id);
+          } catch (fetchErr) {
+            console.error(`❌ Erreur lors de la récupération des données pour ${item.id}: ${fetchErr.message}`);
+          }
         }
+      }
+
+      if (addedInThisScan > 0) {
+        console.log(`🔍 Scan terminé: ${addedInThisScan} nouveaux channels ajoutés (Total: ${channels.length})`);
       }
     } catch (err) {
       console.error(`🔍 Erreur autoScan "${name}": ${err.message}`);
@@ -300,6 +334,42 @@ app.get('/api/search', async (req, res) => {
 
   const results = await searchChannels(query);
   res.json({ results });
+});
+
+// Route pour les statistiques globales
+app.get('/api/stats', async (req, res) => {
+  try {
+    let totalSubscribers = 0;
+    let totalChannels = channels.length;
+
+    // Calculer le total des abonnés
+    for (const channelId of channels) {
+      let history = channelDataCache[channelId];
+
+      if (!history || history.length === 0) {
+        const filePath = path.join(DATA_DIR, `${channelId}.json`);
+        try {
+          const fileData = await fs.readFile(filePath, 'utf8');
+          history = JSON.parse(fileData);
+        } catch {
+          history = [];
+        }
+      }
+
+      const latest = history[history.length - 1];
+      if (latest && latest.subscribers) {
+        totalSubscribers += latest.subscribers;
+      }
+    }
+
+    res.json({
+      totalChannels,
+      totalSubscribers
+    });
+  } catch (err) {
+    console.error('Error fetching stats:', err);
+    res.status(500).json({ error: 'Failed to fetch stats' });
+  }
 });
 
 // Routes API

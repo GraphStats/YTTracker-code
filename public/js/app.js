@@ -40,7 +40,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }, randomDuration);
 
     fetchChannels();
+    fetchGlobalStats(); // Charger les stats globales
     setInterval(() => fetchChannels(currentPage, searchInput.value), 60000); // Auto refresh every 60s
+    setInterval(() => fetchGlobalStats(), 60000); // Refresh stats every 60s
 });
 
 // Fetch Data (paginated)
@@ -57,6 +59,19 @@ async function fetchChannels(page = 1, search = '') {
         renderPagination();
     } catch (err) {
         console.error('Failed to fetch channels:', err);
+    }
+}
+
+// Fetch Global Stats
+async function fetchGlobalStats() {
+    try {
+        const res = await fetch(`${API_BASE}/stats`);
+        const data = await res.json();
+
+        document.getElementById('totalChannels').textContent = formatNumber(data.totalChannels);
+        document.getElementById('totalSubscribers').textContent = formatNumber(data.totalSubscribers);
+    } catch (err) {
+        console.error('Failed to fetch global stats:', err);
     }
 }
 
