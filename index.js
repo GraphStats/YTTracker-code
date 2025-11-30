@@ -161,12 +161,11 @@ setInterval(cleanupCache, 15 * 60 * 1000); // 15 minutes
 
 
 
-// Setup route + timer pour chaque channel
-function setupChannel(channelId, delayMs = 0) {
+// Setup route UNIQUEMENT (pas de timer ici)
+function registerChannelRoute(channelId) {
   const routePath = `/data/${channelId}`;
 
   if (isRouteAlreadyRegistered(routePath)) {
-    console.log(`⚠️ Route déjà setup pour ${channelId}`);
     return;
   }
 
@@ -182,12 +181,42 @@ function setupChannel(channelId, delayMs = 0) {
       res.status(404).json({ error: 'Data not found' });
     }
   });
+}
 
-  // Et on lance la collecte avec délai initial pour éviter 502
-  setTimeout(() => {
-    fetchChannelData(channelId);
-    setInterval(() => fetchChannelData(channelId), REFRESH_INTERVAL);
-  }, delayMs);
+// Scheduler centralisé - UN SEUL timer pour TOUS les channels
+let schedulerRunning = false;
+async function startUpdateScheduler() {
+  if (schedulerRunning) {
+    console.log('⚠️ Scheduler déjà en cours, ignorer');
+    return;
+  }
+  schedulerRunning = true;
+  console.log('🔄 Démarrage du scheduler centralisé...');
+
+  let currentIndex = 0;
+
+  const runNextUpdate = async () => {
+    if (channels.length === 0) {
+      setTimeout(runNextUpdate, 1000);
+      return;
+    }
+
+    // Délai entre chaque channel pour répartir la charge
+    const delayBetweenChannels = Math.max(200, Math.floor(REFRESH_INTERVAL / channels.length));
+
+    const channelId = channels[currentIndex];
+    currentIndex = (currentIndex + 1) % channels.length;
+
+    try {
+      await fetchChannelData(channelId);
+    } catch (err) {
+      console.error(`Scheduler error for ${channelId}:`, err);
+    }
+
+    setTimeout(runNextUpdate, delayBetweenChannels);
+  };
+
+  runNextUpdate();
 }
 
 // Génération de noms aléatoires
@@ -237,7 +266,15 @@ async function searchChannels(query) {
 }
 
 // Auto scan (modifié pour utiliser la nouvelle API avec des termes aléatoires)
+let autoScanRunning = false;
 async function autoScan() {
+  if (autoScanRunning) {
+    console.log('⚠️ AutoScan déjà en cours, ignorer');
+    return;
+  }
+  autoScanRunning = true;
+  console.log('🔍 Démarrage de l\'auto-scan...');
+
   setInterval(async () => {
     const name = generateRandomName().substring(0, 3); // Recherche courte pour plus de résultats
     try {
@@ -246,7 +283,7 @@ async function autoScan() {
         if (!channels.includes(item.id)) {
           channels.push(item.id);
           await saveChannels();
-          setupChannel(item.id);
+          registerChannelRoute(item.id);
           console.log(`📡 Ajout auto : ${item.name} (${item.id})`);
         }
       }
@@ -327,7 +364,7 @@ app.post('/add-channel', async (req, res) => {
 
   channels.push(id);
   await saveChannels();
-  setupChannel(id);
+  registerChannelRoute(id);
   res.json({ success: true, route: `/data/${id}` });
 });
 
@@ -350,10 +387,13 @@ app.post('/api/update/:id', async (req, res) => {
   // Charger toutes les données existantes AVANT de fetcher de nouvelles données
   await loadAllChannelData();
 
-  // Espacer les requêtes initiales pour éviter 502
-  channels.forEach((channelId, index) => {
-    setupChannel(channelId, index * 200); // 2 secondes entre chaque
+  // Setup des routes pour tous les channels
+  channels.forEach(channelId => {
+    registerChannelRoute(channelId);
   });
+
+  // Lancer le scheduler centralisé (UN SEUL timer pour tous)
+  startUpdateScheduler();
 
   autoScan();
 
