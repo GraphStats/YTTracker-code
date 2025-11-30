@@ -10,6 +10,7 @@ const path = require('path');
 const PORT = 30056;
 const DATA_DIR = path.join(__dirname, 'data');
 const CHANNELS_FILE = path.join(__dirname, 'channels.json');
+const BACKUP_FILE = path.join(__dirname, 'channels.backup.json');
 
 const SEARCH_INTERVAL = 3000; // 3 secondes entre chaque recherche auto
 const BATCH_SIZE = 5;         // Nombre de requêtes en parallèle
@@ -58,15 +59,50 @@ fs.mkdir(DATA_DIR, { recursive: true }).catch(console.error);
 
 async function loadChannels() {
   try {
+    // 1. Try to load the main file
     const data = await fs.readFile(CHANNELS_FILE, 'utf8');
     channels = JSON.parse(data);
-  } catch {
-    channels = [];
+    console.log(`✅ Loaded ${channels.length} channels from ${CHANNELS_FILE}`);
+
+    // 2. Create/Update backup on successful load
+    await fs.writeFile(BACKUP_FILE, data);
+  } catch (err) {
+    console.error(`⚠️ Error loading ${CHANNELS_FILE}:`, err.message);
+
+    // 3. If main file fails, try backup
+    try {
+      if (err.code !== 'ENOENT') {
+        console.warn('⚠️ Main file corrupted? Attempting to restore from backup...');
+      }
+
+      const backupData = await fs.readFile(BACKUP_FILE, 'utf8');
+      channels = JSON.parse(backupData);
+      console.log(`✅ Restored ${channels.length} channels from backup.`);
+
+      // Restore main file
+      await fs.writeFile(CHANNELS_FILE, backupData);
+    } catch (backupErr) {
+      if (err.code === 'ENOENT' && backupErr.code === 'ENOENT') {
+        console.log('wm No channels file or backup found. Starting with empty list.');
+        channels = [];
+      } else {
+        console.error('❌ CRITICAL ERROR: Unable to load channels from file or backup.');
+        console.error('Main Error:', err);
+        console.error('Backup Error:', backupErr);
+        process.exit(1); // Exit to prevent data overwrite
+      }
+    }
   }
 }
 
 async function saveChannels() {
-  await fs.writeFile(CHANNELS_FILE, JSON.stringify(channels, null, 2));
+  const tempFile = `${CHANNELS_FILE}.tmp`;
+  try {
+    await fs.writeFile(tempFile, JSON.stringify(channels, null, 2));
+    await fs.rename(tempFile, CHANNELS_FILE);
+  } catch (err) {
+    console.error('❌ Error saving channels:', err);
+  }
 }
 
 // Load only the latest stats into memory at startup
