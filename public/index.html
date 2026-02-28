@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YTTracker - Premium YouTube Tracker</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+</head>
+
+<body>
+
+  <div id="loading-screen">
+    <div class="loading-content">
+      <div class="sk-cube-grid">
+        <div class="sk-cube sk-cube1"></div>
+        <div class="sk-cube sk-cube2"></div>
+        <div class="sk-cube sk-cube3"></div>
+        <div class="sk-cube sk-cube4"></div>
+        <div class="sk-cube sk-cube5"></div>
+        <div class="sk-cube sk-cube6"></div>
+        <div class="sk-cube sk-cube7"></div>
+        <div class="sk-cube sk-cube8"></div>
+        <div class="sk-cube sk-cube9"></div>
+      </div>
+      <h2>Scanning YouTube...</h2>
+    </div>
+  </div>
+
+  <div class="container">
+    <header>
+      <div class="logo">
+        <i class="fab fa-youtube"></i>
+        <span>YTTracker</span>
+      </div>
+      <div style="text-align: center; font-size: 0.8em; margin-top: 10px; opacity: 0.7;">
+        Thanks to SkyBots.tech for the host!
+      </div>
+
+      <!-- Global Stats Section -->
+      <div class="global-stats">
+        <div class="stat-card glass">
+          <i class="fas fa-tv"></i>
+          <div class="stat-info">
+            <div class="stat-label">Chaînes Trackées</div>
+            <div class="stat-value" id="totalChannels">0</div>
+          </div>
+        </div>
+        <div class="stat-card glass">
+          <i class="fas fa-users"></i>
+          <div class="stat-info">
+            <div class="stat-label">Total Abonnés</div>
+            <div class="stat-value" id="totalSubscribers">0</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="actions">
+        <div class="search-bar">
+          <i class="fas fa-search"></i>
+          <input type="text" id="searchInput" placeholder="Search channels...">
+        </div>
+        <button class="btn-primary" onclick="openAddModal()">
+          <i class="fas fa-plus"></i> Add Channel
+        </button>
+      </div>
+    </header>
+    <main id="channelGrid" class="channel-grid">
+      <!-- Channels will be injected here -->
+      <div class="glass channel-card"
+        style="display: flex; justify-content: center; align-items: center; min-height: 200px;">
+        <i class="fas fa-spinner fa-spin fa-2x"></i>
+      </div>
+    </main>
+    <div class="pagination-container">
+      <button id="prevBtn" class="btn-primary" disabled><i class="fas fa-chevron-left"></i> Previous</button>
+      <span id="pageIndicator">Page 1</span>
+      <button id="nextBtn" class="btn-primary">Next <i class="fas fa-chevron-right"></i></button>
+    </div>
+  </div>
+
+  <!-- Add Channel Modal -->
+  <div id="addModal" class="modal-overlay">
+    <div class="glass modal">
+      <div class="modal-header">
+        <h2>Add New Channel</h2>
+        <button class="close-btn" onclick="closeAddModal()"><i class="fas fa-times"></i></button>
+      </div>
+      <div class="modal-body">
+        <div class="search-bar" style="width: 100%; margin-bottom: 1rem;">
+          <input type="text" id="newChannelSearch" placeholder="Search for a channel (e.g. MrBeast)..."
+            style="width: 100%;">
+        </div>
+        <div id="searchResults" class="search-results"
+          style="max-height: 300px; overflow-y: auto; margin-bottom: 1rem;">
+          <!-- Results will be injected here -->
+        </div>
+        <div style="text-align: center; color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 1rem;">
+          OR enter ID directly
+        </div>
+        <div class="search-bar" style="width: 100%; margin-bottom: 1rem;">
+          <input type="text" id="newChannelId" placeholder="Enter YouTube Channel ID (e.g., UC...)"
+            style="width: 100%;">
+        </div>
+        <button class="btn-primary" onclick="addChannel()" style="width: 100%; justify-content: center;">
+          Track Channel ID
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Channel Details Modal -->
+  <div id="detailsModal" class="modal-overlay">
+    <div class="glass modal" style="max-width: 1000px;">
+      <div class="modal-header">
+        <div style="display: flex; align-items: center; gap: 1rem;">
+          <img id="modalAvatar" src="" alt="" class="avatar">
+          <div>
+            <h2 id="modalName">Channel Name</h2>
+            <p id="modalId" style="color: var(--text-secondary); font-size: 0.9rem;">ID</p>
+          </div>
+        </div>
+        <button class="close-btn" onclick="closeDetailsModal()"><i class="fas fa-times"></i></button>
+      </div>
+      <div class="modal-body">
+        <div class="stats" style="display: flex; justify-content: space-around; margin-bottom: 2rem;">
+          <div>
+            <p style="color: var(--text-secondary);">Abonnés Actuels</p>
+            <h3 id="modalSubs" class="sub-count" style="font-size: 2rem;">0</h3>
+          </div>
+        </div>
+        <div style="text-align: center; margin-bottom: 2rem;">
+          <button id="updateBtn" class="btn-primary" style="margin: 0 auto;">
+            <i class="fas fa-sync-alt"></i> Ask to the server an update
+          </button>
+        </div>
+        <div style="height: 400px; width: 100%;">
+          <canvas id="growthChart"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/app.js"></script>
+</body>
+
+</html>
